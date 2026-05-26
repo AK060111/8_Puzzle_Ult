@@ -1,6 +1,7 @@
 from collections import deque
 import random
 import tkinter as tk
+import heapq
 
 # Rules
 MOVES = [
@@ -61,6 +62,14 @@ def build_path(parent, node):
         node = parent[node]
 
     return path[::-1]
+def misplaced_tiles(state, goal):
+    count = 0
+
+    for s, g in zip(state, goal):
+        if s != 0 and s != g:
+            count += 1
+
+    return count
 
 
 # Aglorithm
@@ -150,12 +159,76 @@ def ids(start, goal, max_depth=50):
             return path, total_expanded
 
     return None, total_expanded
+def ucs(start, goal):
+    start = tuple(start)
+    goal = tuple(goal)
 
+    frontier = []
+    heapq.heappush(frontier, (0, start))
+
+    parent = {start: None}
+    cost_so_far = {start: 0}
+    expanded = 0
+
+    while frontier:
+        current_cost, current = heapq.heappop(frontier)
+        expanded += 1
+
+        if current == goal:
+            return build_path(parent, current), expanded
+
+        for neighbor in get_neighbors(current):
+            step_cost = misplaced_tiles(neighbor, goal)
+            new_cost = current_cost + step_cost
+
+            if neighbor not in cost_so_far or new_cost < cost_so_far[neighbor]:
+                cost_so_far[neighbor] = new_cost
+                parent[neighbor] = current
+                heapq.heappush(frontier, (new_cost, neighbor))
+
+    return None, expanded
+
+
+def greedy_search(start, goal):
+    start = tuple(start)
+    goal = tuple(goal)
+
+    frontier = []
+    heapq.heappush(frontier, (misplaced_tiles(start, goal), start))
+
+    parent = {start: None}
+    reached = set()
+    expanded = 0
+
+    while frontier:
+        current_h, current = heapq.heappop(frontier)
+
+        if current in reached:
+            continue
+
+        expanded += 1
+
+        if current == goal:
+            return build_path(parent, current), expanded
+
+        reached.add(current)
+
+        for neighbor in get_neighbors(current):
+            in_frontier = neighbor in parent and neighbor not in reached
+
+            if neighbor not in reached and not in_frontier:
+                parent[neighbor] = current
+                h = misplaced_tiles(neighbor, goal)
+                heapq.heappush(frontier, (h, neighbor))
+
+    return None, expanded
 
 ALGORITHMS = {
     "BFS": bfs,
     "DFS": dfs,
     "IDS": ids,
+    "UCS": ucs,
+    "Greedy": greedy_search,
 }
 
 
@@ -164,7 +237,7 @@ class PuzzleApp:
     def __init__(self, root):
         self.root = root
         self.root.title("8 Puzzle Search")
-        self.root.geometry("980x680")
+        self.root.geometry("980x720")
         self.root.configure(bg="#f4f6f8")
         self.root.resizable(False, False)
 
@@ -217,25 +290,83 @@ class PuzzleApp:
         control = self.panel(parent)
         control.pack(side="left", fill="y", padx=(0, 18))
 
-        self.title(control, "Algorithm").pack(pady=(20, 14))
+        self.title(control, "Algorithm").pack(pady=(20, 10))
+
+        # Vùng chọn thuật toán có scroll riêng.
+        # Khi thêm nhiều thuật toán, phần này sẽ cuộn được
+        # còn các nút Solve/New/Pause/Resume vẫn cố định bên dưới.
+        algo_area = tk.Frame(control, bg="white")
+        algo_area.pack(fill="x", padx=12, pady=(0, 8))
+
+        self.algo_canvas = tk.Canvas(
+            algo_area,
+            width=155,
+            height=235,
+            bg="white",
+            highlightthickness=0
+        )
+        self.algo_canvas.pack(side="left", fill="x", expand=True)
+
+        algo_scrollbar = tk.Scrollbar(
+            algo_area,
+            orient="vertical",
+            command=self.algo_canvas.yview
+        )
+        algo_scrollbar.pack(side="right", fill="y")
+
+        self.algo_canvas.configure(yscrollcommand=algo_scrollbar.set)
+
+        self.algo_container = tk.Frame(self.algo_canvas, bg="white")
+        self.algo_canvas_window = self.algo_canvas.create_window(
+            (0, 0),
+            window=self.algo_container,
+            anchor="nw"
+        )
+
+        self.algo_container.bind(
+            "<Configure>",
+            lambda e: self.algo_canvas.configure(
+                scrollregion=self.algo_canvas.bbox("all")
+            )
+        )
+
+        self.algo_canvas.bind(
+            "<Configure>",
+            lambda e: self.algo_canvas.itemconfigure(
+                self.algo_canvas_window,
+                width=e.width
+            )
+        )
+
+        self.algo_canvas.bind(
+            "<Enter>",
+            lambda e: self.root.bind_all("<MouseWheel>", self.scroll_algorithm_mouse)
+        )
+        self.algo_canvas.bind(
+            "<Leave>",
+            lambda e: self.root.unbind_all("<MouseWheel>")
+        )
 
         for name in ALGORITHMS:
             tk.Radiobutton(
-                control,
+                self.algo_container,
                 text=name,
                 value=name,
                 variable=self.selected_algorithm,
-                font=("Arial", 15, "bold"),
+                font=("Arial", 14, "bold"),
                 bg="white",
                 activebackground="white",
                 selectcolor="#e8f0fe",
                 indicatoron=False,
                 width=12,
-                pady=8
-            ).pack(padx=20, pady=8)
+                pady=7
+            ).pack(fill="x", padx=8, pady=5)
+
+        buttons = tk.Frame(control, bg="white")
+        buttons.pack(fill="x", padx=20, pady=(8, 0))
 
         tk.Button(
-            control,
+            buttons,
             text="Solve",
             font=("Arial", 15, "bold"),
             width=12,
@@ -245,10 +376,10 @@ class PuzzleApp:
             activeforeground="white",
             relief="flat",
             command=self.solve
-        ).pack(padx=20, pady=(40, 10), ipady=6)
+        ).pack(pady=(0, 8), ipady=6)
 
         tk.Button(
-            control,
+            buttons,
             text="New Puzzle",
             font=("Arial", 13, "bold"),
             width=12,
@@ -257,7 +388,29 @@ class PuzzleApp:
             activebackground="#dce3ec",
             relief="flat",
             command=self.new_puzzle
-        ).pack(padx=20, pady=8, ipady=5)
+        ).pack(pady=6, ipady=5)
+
+        tk.Button(
+            buttons,
+            text="Pause",
+            font=("Arial", 13, "bold"),
+            width=12,
+            bg="#f4b400",
+            fg="white",
+            relief="flat",
+            command=self.pause_animation
+        ).pack(pady=6, ipady=5)
+
+        tk.Button(
+            buttons,
+            text="Resume",
+            font=("Arial", 13, "bold"),
+            width=12,
+            bg="#34a853",
+            fg="white",
+            relief="flat",
+            command=self.resume_animation
+        ).pack(pady=6, ipady=5)
 
         self.info_label = tk.Label(
             control,
@@ -266,28 +419,7 @@ class PuzzleApp:
             bg="white",
             justify="left"
         )
-        self.info_label.pack(side="bottom", pady=24)
-        tk.Button(
-            control,
-            text="Pause",
-            font=("Arial", 13, "bold"),
-            width=12,
-            bg="#f4b400",
-            fg="white",
-            relief="flat",
-            command=self.pause_animation
-        ).pack(padx=20, pady=6, ipady=5)
-
-        tk.Button(
-            control,
-            text="Resume",
-            font=("Arial", 13, "bold"),
-            width=12,
-            bg="#34a853",
-            fg="white",
-            relief="flat",
-            command=self.resume_animation
-        ).pack(padx=20, pady=6, ipady=5)
+        self.info_label.pack(side="bottom", pady=(8, 18))
 
     def states_panel(self, parent):
         states = self.panel(parent)
@@ -328,7 +460,14 @@ class PuzzleApp:
             lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         )
 
-        self.canvas.bind_all("<MouseWheel>", self.scroll_mouse)
+        self.canvas.bind(
+            "<Enter>",
+            lambda e: self.root.bind_all("<MouseWheel>", self.scroll_mouse)
+        )
+        self.canvas.bind(
+            "<Leave>",
+            lambda e: self.root.unbind_all("<MouseWheel>")
+        )
 
     def title(self, parent, text):
         return tk.Label(
@@ -343,9 +482,9 @@ class PuzzleApp:
     def create_grid(self, parent, big=False):
         cells = []
 
-        font_size = 22 if big else 13
-        width = 4 if big else 2
-        height = 2 if big else 1
+        font_size = 22 if big else 16
+        width = 4 if big else 4
+        height = 2 if big else 2
         border = 3 if big else 2
 
         for i in range(9):
@@ -448,6 +587,12 @@ class PuzzleApp:
         self.draw_main_grids()
         self.info_label.config(text="Steps: 0\nNodes: 0")
 
+    def scroll_algorithm_mouse(self, event):
+        self.algo_canvas.yview_scroll(
+            int(-1 * (event.delta / 120)),
+            "units"
+        )
+
     def scroll_mouse(self, event):
         self.canvas.yview_scroll(
             int(-1 * (event.delta / 120)),
@@ -469,7 +614,6 @@ class PuzzleApp:
 
         self.paused = False
         self.show_states()
-
 
 if __name__ == "__main__":
     root = tk.Tk()
