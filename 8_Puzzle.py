@@ -188,7 +188,6 @@ def ucs(start, goal):
 
     return None, expanded
 
-
 def greedy_search(start, goal):
     start = tuple(start)
     goal = tuple(goal)
@@ -223,12 +222,124 @@ def greedy_search(start, goal):
 
     return None, expanded
 
+def astar(start, goal):
+    start = tuple(start)
+    goal = tuple(goal)
+
+    frontier = []
+    g_start = 0
+    h_start = misplaced_tiles(start, goal)
+    f_start = g_start + h_start
+
+    heapq.heappush(frontier, (f_start, g_start, start))
+
+    parent = {start: None}
+    cost_so_far = {start: 0}
+    reached = set()
+    expanded = 0
+
+    while frontier:
+        current_f, current_g, current = heapq.heappop(frontier)
+
+        if current in reached:
+            continue
+
+        expanded += 1
+
+        if current == goal:
+            return build_path(parent, current), expanded
+
+        reached.add(current)
+
+        for neighbor in get_neighbors(current):
+            step_cost = misplaced_tiles(neighbor, goal)
+            new_g = cost_so_far[current] + step_cost
+
+            if neighbor in reached and new_g >= cost_so_far.get(neighbor, float("inf")):
+                continue
+
+            if new_g < cost_so_far.get(neighbor, float("inf")):
+                cost_so_far[neighbor] = new_g
+                parent[neighbor] = current
+
+                h = misplaced_tiles(neighbor, goal)
+                f = new_g + h
+
+                heapq.heappush(frontier, (f, new_g, neighbor))
+
+                if neighbor in reached:
+                    reached.remove(neighbor)
+    return None, expanded
+def ida_star(start, goal):
+    start = tuple(start)
+    goal = tuple(goal)
+
+    def search(path, g, bound):
+        nonlocal expanded
+
+        current = path[-1]
+        h = misplaced_tiles(current, goal)
+        f = g + h
+
+        if f > bound:
+            return f, None
+
+        expanded += 1
+
+        if current == goal:
+            return f, build_path_from_list(path)
+
+        min_bound = float("inf")
+
+        for neighbor in get_neighbors(current):
+            if neighbor in path:
+                continue
+
+            step_cost = misplaced_tiles(neighbor, goal)
+            path.append(neighbor)
+
+            result_bound, result_path = search(
+                path,
+                g + step_cost,
+                bound
+            )
+
+            if result_path is not None:
+                return result_bound, result_path
+
+            if result_bound < min_bound:
+                min_bound = result_bound
+
+            path.pop()
+
+        return min_bound, None
+
+    def build_path_from_list(path):
+        return [list(state) for state in path]
+
+    bound = misplaced_tiles(start, goal)
+    path = [start]
+    expanded = 0
+
+    while True:
+        new_bound, result_path = search(path, 0, bound)
+
+        if result_path is not None:
+            return result_path, expanded
+
+        if new_bound == float("inf"):
+            return None, expanded
+
+        bound = new_bound
+
 ALGORITHMS = {
     "BFS": bfs,
     "DFS": dfs,
     "IDS": ids,
     "UCS": ucs,
     "Greedy": greedy_search,
+    "A*": astar,
+    "IDA*": ida_star,
 }
 
 
