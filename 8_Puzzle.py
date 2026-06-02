@@ -71,6 +71,17 @@ def misplaced_tiles(state, goal):
 
     return count
 
+def manhattan_zero(state, goal):
+
+    zero_state = state.index(0)
+
+    zero_goal = goal.index(0)
+
+    row1, col1 = divmod(zero_state, 3)
+
+    row2, col2 = divmod(zero_goal, 3)
+
+    return abs(row1 - row2) + abs(col1 - col2)
 
 # Aglorithm
 def bfs(start, goal):
@@ -331,6 +342,79 @@ def ida_star(start, goal):
             return None, expanded
 
         bound = new_bound
+def simple_hill_climbing(start, goal):
+    start = tuple(start)
+    goal = tuple(goal)
+
+    current = start
+    current_value = manhattan_zero(current, goal)
+
+    parent = {current: None}
+    expanded = 0
+
+    while True:
+        expanded += 1
+
+        if current == goal:
+            return build_path(parent, current), expanded
+
+        found_better = False
+
+        for neighbor in get_neighbors(current):
+
+            neighbor_value = manhattan_zero(neighbor, goal)
+
+            # Hill Climbing: càng nhỏ càng tốt
+            if neighbor_value < current_value:
+
+                parent[neighbor] = current
+
+                current = neighbor
+                current_value = neighbor_value
+
+                found_better = True
+                break
+
+        if not found_better:
+            return build_path(parent, current), expanded
+
+def steepest_hill_climbing(start, goal):
+    start = tuple(start)
+    goal = tuple(goal)
+
+    current = start
+
+    parent = {current: None}
+    expanded = 0
+
+    while True:
+        expanded += 1
+
+        if current == goal:
+            return build_path(parent, current), expanded
+
+        current_value = manhattan_zero(current, goal)
+
+        neighbors = list(get_neighbors(current))
+
+        best_neighbor = None
+        best_value = current_value
+
+        for neighbor in neighbors:
+
+            value = manhattan_zero(neighbor, goal)
+
+            if value < best_value:
+                best_value = value
+                best_neighbor = neighbor
+
+        # Không có trạng thái tốt hơn
+        if best_neighbor is None:
+            return build_path(parent, current), expanded
+
+        parent[best_neighbor] = current
+        current = best_neighbor
+
 
 ALGORITHMS = {
     "BFS": bfs,
@@ -340,6 +424,8 @@ ALGORITHMS = {
     "Greedy": greedy_search,
     "A*": astar,
     "IDA*": ida_star,
+    "Simple HC": simple_hill_climbing,
+    "Steepest HC": steepest_hill_climbing,
 }
 
 
