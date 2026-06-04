@@ -415,6 +415,146 @@ def steepest_hill_climbing(start, goal):
         parent[best_neighbor] = current
         current = best_neighbor
 
+def stochastic_hill_climbing(start, goal):
+    start = tuple(start)
+    goal = tuple(goal)
+
+    current = start
+    current_value = misplaced_tiles(current, goal)
+
+    parent = {current: None}
+    expanded = 0
+
+    while True:
+        expanded += 1
+
+        if current == goal:
+            return build_path(parent, current), expanded
+
+        better_neighbors = []
+
+        for neighbor in get_neighbors(current):
+            neighbor_value = misplaced_tiles(neighbor, goal)
+
+            # Cang nho cang tot
+            if neighbor_value < current_value:
+                better_neighbors.append(neighbor)
+
+        # Khong con trang thai tot hon -> bi ket cuc bo
+        if not better_neighbors:
+            return build_path(parent, current), expanded
+
+        next_state = random.choice(better_neighbors)
+        parent[next_state] = current
+        current = next_state
+        current_value = misplaced_tiles(current, goal)
+
+
+def random_restart_hill_climbing(start, goal, max_restart=30):
+    start = tuple(start)
+    goal = tuple(goal)
+
+    total_expanded = 0
+    best_path = None
+    best_value = float("inf")
+
+    for i in range(max_restart):
+        # Lan dau tien chay dung Start, cac lan sau tao diem bat dau moi
+        if i == 0:
+            current = start
+        else:
+            while True:
+                current = tuple(random_state())
+                if is_solvable(list(current), list(goal)):
+                    break
+
+        current_value = misplaced_tiles(current, goal)
+        parent = {current: None}
+
+        while True:
+            total_expanded += 1
+
+            if current == goal:
+                return build_path(parent, current), total_expanded
+
+            if current_value < best_value:
+                best_value = current_value
+                best_path = build_path(parent, current)
+
+            better_neighbors = []
+
+            for neighbor in get_neighbors(current):
+                neighbor_value = misplaced_tiles(neighbor, goal)
+
+                if neighbor_value < current_value:
+                    better_neighbors.append(neighbor)
+
+            # Bi ket -> restart
+            if not better_neighbors:
+                break
+
+            next_state = random.choice(better_neighbors)
+            parent[next_state] = current
+            current = next_state
+            current_value = misplaced_tiles(current, goal)
+
+    return best_path, total_expanded
+
+
+def local_beam_search(start, goal, k=3, max_steps=100):
+    start = tuple(start)
+    goal = tuple(goal)
+
+    # Tao k trang thai ban dau: gom Start va k-1 trang thai ngau nhien giai duoc
+    current_set = [start]
+
+    while len(current_set) < k:
+        state = tuple(random_state())
+
+        if state != start and is_solvable(list(state), list(goal)):
+            current_set.append(state)
+
+    parent = {state: None for state in current_set}
+    expanded = 0
+
+    for _ in range(max_steps):
+        neighbor_states = []
+
+        for state in current_set:
+            expanded += 1
+
+            if state == goal:
+                return build_path(parent, state), expanded
+
+            for neighbor in get_neighbors(state):
+                if neighbor not in parent:
+                    parent[neighbor] = state
+                    neighbor_states.append(neighbor)
+
+        # Khong con lan can de di tiep
+        if not neighbor_states:
+            best_state = min(
+                current_set,
+                key=lambda s: misplaced_tiles(s, goal)
+            )
+            return build_path(parent, best_state), expanded
+
+        for neighbor in neighbor_states:
+            if neighbor == goal:
+                return build_path(parent, neighbor), expanded
+
+        # Chon k trang thai tot nhat theo heuristic h
+        neighbor_states.sort(
+            key=lambda s: misplaced_tiles(s, goal)
+        )
+        current_set = neighbor_states[:k]
+
+    best_state = min(
+        current_set,
+        key=lambda s: misplaced_tiles(s, goal)
+    )
+    return build_path(parent, best_state), expanded
+
 
 ALGORITHMS = {
     "BFS": bfs,
@@ -426,6 +566,9 @@ ALGORITHMS = {
     "IDA*": ida_star,
     "Simple HC": simple_hill_climbing,
     "Steepest HC": steepest_hill_climbing,
+    "Stochastic HC": stochastic_hill_climbing,
+    "Random Restart HC": random_restart_hill_climbing,
+    "Local Beam": local_beam_search,
 }
 
 
