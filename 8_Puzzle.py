@@ -2,6 +2,7 @@ from collections import deque
 import random
 import tkinter as tk
 import heapq
+import math
 
 # Rules
 MOVES = [
@@ -10,6 +11,13 @@ MOVES = [
     (-1, lambda i: i % 3 != 0),
     (1, lambda i: i % 3 != 2),
 ]
+
+# Limits for blind / heavy searches.
+# 8-puzzle has at most 9! states, but if start and goal are not solvable
+# with each other, we do not want the GUI to hang for too long.
+MAX_EXPANDED_BLIND = 50000
+MAX_EXPANDED_SEARCH = 200000
+MAX_IDA_ITERATIONS = 80
 
 
 def count_inversions(state):
@@ -35,11 +43,13 @@ def random_state():
 
 
 def generate_puzzle():
+    # Khong ep start/goal phai solvable.
+    # Neu bai toan vo nghiem, thuat toan se bao Not found.
     while True:
         start = random_state()
         goal = random_state()
 
-        if start != goal and is_solvable(start, goal):
+        if start != goal:
             return start, goal
 
 
@@ -105,6 +115,33 @@ def bfs(start, goal):
                 queue.append(neighbor)
 
     return None, expanded
+
+
+def bfs_limited(start, goal, max_expanded=MAX_EXPANDED_BLIND):
+    start = tuple(start)
+    goal = tuple(goal)
+
+    queue = deque([start])
+    parent = {start: None}
+    expanded = 0
+
+    while queue and expanded < max_expanded:
+        current = queue.popleft()
+        expanded += 1
+
+        if current == goal:
+            return build_path(parent, current), expanded
+
+        for neighbor in get_neighbors(current):
+            if neighbor not in parent:
+                parent[neighbor] = current
+                queue.append(neighbor)
+
+    return None, expanded
+
+
+def blind_start_search(start, goal):
+    return bfs_limited(start, goal, MAX_EXPANDED_BLIND)
 
 
 def dfs(start, goal, max_depth=1000):
@@ -332,7 +369,10 @@ def ida_star(start, goal):
     path = [start]
     expanded = 0
 
-    while True:
+    iteration = 0
+
+    while iteration < MAX_IDA_ITERATIONS and expanded < MAX_EXPANDED_SEARCH:
+        iteration += 1
         new_bound, result_path = search(path, 0, bound)
 
         if result_path is not None:
@@ -342,6 +382,8 @@ def ida_star(start, goal):
             return None, expanded
 
         bound = new_bound
+
+    return None, expanded
 def simple_hill_climbing(start, goal):
     start = tuple(start)
     goal = tuple(goal)
@@ -376,7 +418,7 @@ def simple_hill_climbing(start, goal):
                 break
 
         if not found_better:
-            return build_path(parent, current), expanded
+            return None, expanded
 
 def steepest_hill_climbing(start, goal):
     start = tuple(start)
@@ -410,7 +452,7 @@ def steepest_hill_climbing(start, goal):
 
         # Không có trạng thái tốt hơn
         if best_neighbor is None:
-            return build_path(parent, current), expanded
+            return None, expanded
 
         parent[best_neighbor] = current
         current = best_neighbor
@@ -442,7 +484,7 @@ def stochastic_hill_climbing(start, goal):
 
         # Khong con trang thai tot hon -> bi ket cuc bo
         if not better_neighbors:
-            return build_path(parent, current), expanded
+            return None, expanded
 
         next_state = random.choice(better_neighbors)
         parent[next_state] = current
@@ -463,10 +505,7 @@ def random_restart_hill_climbing(start, goal, max_restart=30):
         if i == 0:
             current = start
         else:
-            while True:
-                current = tuple(random_state())
-                if is_solvable(list(current), list(goal)):
-                    break
+            current = tuple(random_state())
 
         current_value = misplaced_tiles(current, goal)
         parent = {current: None}
@@ -498,8 +537,7 @@ def random_restart_hill_climbing(start, goal, max_restart=30):
             current = next_state
             current_value = misplaced_tiles(current, goal)
 
-    return best_path, total_expanded
-
+    return None, total_expanded
 
 def local_beam_search(start, goal, k=3, max_steps=100):
     start = tuple(start)
@@ -511,7 +549,7 @@ def local_beam_search(start, goal, k=3, max_steps=100):
     while len(current_set) < k:
         state = tuple(random_state())
 
-        if state != start and is_solvable(list(state), list(goal)):
+        if state != start:
             current_set.append(state)
 
     parent = {state: None for state in current_set}
@@ -533,11 +571,7 @@ def local_beam_search(start, goal, k=3, max_steps=100):
 
         # Khong con lan can de di tiep
         if not neighbor_states:
-            best_state = min(
-                current_set,
-                key=lambda s: misplaced_tiles(s, goal)
-            )
-            return build_path(parent, best_state), expanded
+            return None, expanded
 
         for neighbor in neighbor_states:
             if neighbor == goal:
@@ -549,11 +583,131 @@ def local_beam_search(start, goal, k=3, max_steps=100):
         )
         current_set = neighbor_states[:k]
 
-    best_state = min(
-        current_set,
-        key=lambda s: misplaced_tiles(s, goal)
-    )
-    return build_path(parent, best_state), expanded
+    return None, expanded
+
+
+def blind_goal_search(start, goal):
+    """
+    Tim kiem mu tu Goal ve Start.
+    Vi 8-puzzle co buoc di dao nguoc duoc, ta BFS tu goal den start,
+    sau do dao nguoc path de hien thi dung chieu Start -> Goal.
+    """
+    path, expanded = bfs_limited(goal, start, MAX_EXPANDED_BLIND)
+
+    if path is None:
+        return None, expanded
+
+    path.reverse()
+    return path, expanded
+
+
+def bidirectional_bfs(start, goal):
+    """
+    Tim kiem mu Start + Goal.
+    Chay BFS hai dau: mot dau tu Start, mot dau tu Goal.
+    Khi hai frontier gap nhau thi ghep duong di.
+    """
+    start = tuple(start)
+    goal = tuple(goal)
+
+    if start == goal:
+        return [list(start)], 0
+
+    frontier_start = deque([start])
+    frontier_goal = deque([goal])
+
+    parent_start = {start: None}
+    parent_goal = {goal: None}
+
+    expanded = 0
+
+    def join_path(meet):
+        path_start = build_path(parent_start, meet)       # Start -> meet
+        path_goal = build_path(parent_goal, meet)         # Goal -> meet
+        path_goal.reverse()                               # meet -> Goal
+        return path_start + path_goal[1:]
+
+    while frontier_start and frontier_goal and expanded < MAX_EXPANDED_BLIND:
+        # Mo rong ben co frontier nho hon de giam so node phai duyet
+        if len(frontier_start) <= len(frontier_goal):
+            current = frontier_start.popleft()
+            expanded += 1
+
+            for neighbor in get_neighbors(current):
+                if neighbor not in parent_start:
+                    parent_start[neighbor] = current
+
+                    if neighbor in parent_goal:
+                        return join_path(neighbor), expanded
+
+                    frontier_start.append(neighbor)
+        else:
+            current = frontier_goal.popleft()
+            expanded += 1
+
+            for neighbor in get_neighbors(current):
+                if neighbor not in parent_goal:
+                    parent_goal[neighbor] = current
+
+                    if neighbor in parent_start:
+                        return join_path(neighbor), expanded
+
+                    frontier_goal.append(neighbor)
+
+    return None, expanded
+
+
+def simulated_annealing(start, goal, t0=100.0, t_min=0.001, alpha=0.97, max_steps=3000):
+    """
+    Simulated Annealing cho 8-puzzle.
+    - Luon di tu Start -> Goal.
+    - Neu neighbor tot hon thi nhan.
+    - Neu neighbor xau hon thi van co the nhan theo xac suat exp(-delta / T).
+    - T giam dan: T = alpha * T.
+    """
+    current = tuple(start)
+    goal = tuple(goal)
+
+    current_h = misplaced_tiles(current, goal)
+    current_path = [current]
+
+    best_state = current
+    best_h = current_h
+    best_path = current_path[:]
+
+    t = t0
+    expanded = 0
+
+    while t > t_min and expanded < max_steps:
+        expanded += 1
+
+        if current == goal:
+            return [list(state) for state in current_path], expanded
+
+        neighbors = list(get_neighbors(current))
+        next_state = random.choice(neighbors)
+
+        next_h = misplaced_tiles(next_state, goal)
+        delta = next_h - current_h
+
+        # delta < 0: tot hon nen nhan ngay
+        # delta >= 0: xau hon, nhan voi xac suat exp(-delta / T)
+        if delta < 0 or random.random() < math.exp(-delta / t):
+            current = next_state
+            current_h = next_h
+            current_path.append(current)
+
+            if current_h < best_h:
+                best_state = current
+                best_h = current_h
+                best_path = current_path[:]
+
+        t = alpha * t
+
+    if best_state == goal:
+        return [list(state) for state in best_path], expanded
+
+    return None, expanded
 
 
 ALGORITHMS = {
@@ -569,299 +723,363 @@ ALGORITHMS = {
     "Stochastic HC": stochastic_hill_climbing,
     "Random Restart HC": random_restart_hill_climbing,
     "Local Beam": local_beam_search,
+    "Simulated Annealing": simulated_annealing,
+    "Blind Start": blind_start_search,
+    "Blind Goal": blind_goal_search,
+    "Blind Start+Goal": bidirectional_bfs,
 }
-
 
 # GUI
 class PuzzleApp:
     def __init__(self, root):
         self.root = root
         self.root.title("8 Puzzle Search")
-        self.root.geometry("980x720")
-        self.root.configure(bg="#f4f6f8")
+        self.root.geometry("1260x820")
+        self.root.minsize(1260, 820)
         self.root.resizable(False, False)
+        self.root.configure(bg="#0f172a")
+
+        # Dark sharp theme
+        self.COLORS = {
+            "bg": "#0f172a",
+            "panel": "#111827",
+            "panel_2": "#0b1220",
+            "card": "#1f2937",
+            "cell": "#0f172a",
+            "cell_empty": "#111827",
+            "border": "#334155",
+            "text": "#e5e7eb",
+            "muted": "#94a3b8",
+            "accent": "#38bdf8",
+            "accent_2": "#2563eb",
+            "warning": "#f59e0b",
+            "success": "#22c55e",
+            "danger": "#ef4444",
+        }
 
         self.start, self.goal = generate_puzzle()
         self.selected_algorithm = tk.StringVar(value="BFS")
         self.animation_job = None
-
-        self.start_cells = []
-        self.goal_cells = []
-
-        self.setup_ui()
-        self.draw_main_grids()
         self.paused = False
         self.current_path = []
         self.current_index = 0
 
-    # UI
-    def setup_ui(self):
-        container = tk.Frame(self.root, bg="#f4f6f8")
-        container.pack(fill="both", expand=True, padx=24, pady=20)
+        self.start_cells = []
+        self.goal_cells = []
+        self.status_badge = None
 
-        self.left_panel(container)
-        self.control_panel(container)
-        self.states_panel(container)
+        self.setup_ui()
+        self.draw_main_grids()
+
+    # ---------- UI ----------
+    def setup_ui(self):
+        self.root.grid_columnconfigure(0, weight=0)
+        self.root.grid_columnconfigure(1, weight=0)
+        self.root.grid_columnconfigure(2, weight=0)
+        self.root.grid_rowconfigure(0, weight=1)
+
+        self.left_panel(self.root)
+        self.control_panel(self.root)
+        self.states_panel(self.root)
 
     def panel(self, parent):
         return tk.Frame(
             parent,
-            bg="white",
-            bd=0,
+            bg=self.COLORS["panel"],
             highlightthickness=1,
-            highlightbackground="#d9dee3"
+            highlightbackground=self.COLORS["border"],
+            highlightcolor=self.COLORS["accent"],
+        )
+
+    def title(self, parent, text, size=20):
+        return tk.Label(
+            parent,
+            text=text,
+            font=("Segoe UI", size, "bold"),
+            bg=parent["bg"],
+            fg=self.COLORS["text"],
+        )
+
+    def subtitle(self, parent, text):
+        return tk.Label(
+            parent,
+            text=text,
+            font=("Segoe UI", 10),
+            bg=parent["bg"],
+            fg=self.COLORS["muted"],
         )
 
     def left_panel(self, parent):
         left = self.panel(parent)
-        left.pack(side="left", fill="y", padx=(0, 18))
+        left.grid(row=0, column=0, sticky="ns", padx=(22, 10), pady=18)
+        left.config(width=350, height=784)
+        left.grid_propagate(False)
 
-        self.title(left, "Start").pack(pady=(18, 8))
-        start_frame = tk.Frame(left, bg="white")
-        start_frame.pack(padx=28)
+        header = tk.Frame(left, bg=self.COLORS["panel"])
+        header.pack(fill="x", padx=24, pady=(18, 6))
+        self.title(header, "8 Puzzle", 23).pack(anchor="w")
+        self.subtitle(header, "Start and target configuration").pack(anchor="w", pady=(2, 0))
+
+        self.title(left, "Start", 17).pack(anchor="w", padx=24, pady=(12, 6))
+        start_frame = tk.Frame(left, bg=self.COLORS["panel"])
+        start_frame.pack(padx=24, pady=(0, 8))
         self.start_cells = self.create_grid(start_frame, big=True)
 
-        self.title(left, "Goal").pack(pady=(28, 8))
-        goal_frame = tk.Frame(left, bg="white")
-        goal_frame.pack(padx=28, pady=(0, 20))
+        self.title(left, "Goal", 17).pack(anchor="w", padx=24, pady=(14, 6))
+        goal_frame = tk.Frame(left, bg=self.COLORS["panel"])
+        goal_frame.pack(padx=24, pady=(0, 12))
         self.goal_cells = self.create_grid(goal_frame, big=True)
 
     def control_panel(self, parent):
         control = self.panel(parent)
-        control.pack(side="left", fill="y", padx=(0, 18))
+        control.grid(row=0, column=1, sticky="ns", padx=10, pady=18)
+        control.config(width=330, height=784)
+        control.grid_propagate(False)
 
-        self.title(control, "Algorithm").pack(pady=(20, 10))
+        self.title(control, "Algorithm", 21).pack(anchor="w", padx=22, pady=(22, 2))
+        self.subtitle(control, "Choose search strategy").pack(anchor="w", padx=22, pady=(0, 14))
 
-        # Vùng chọn thuật toán có scroll riêng.
-        # Khi thêm nhiều thuật toán, phần này sẽ cuộn được
-        # còn các nút Solve/New/Pause/Resume vẫn cố định bên dưới.
-        algo_area = tk.Frame(control, bg="white")
-        algo_area.pack(fill="x", padx=12, pady=(0, 8))
+        algo_area = tk.Frame(control, bg=self.COLORS["panel"])
+        algo_area.pack(fill="x", padx=16, pady=(0, 12))
 
         self.algo_canvas = tk.Canvas(
             algo_area,
-            width=155,
-            height=235,
-            bg="white",
-            highlightthickness=0
+            width=220,
+            height=285,
+            bg=self.COLORS["panel"],
+            highlightthickness=0,
         )
-        self.algo_canvas.pack(side="left", fill="x", expand=True)
+        self.algo_canvas.pack(side="left", fill="both", expand=True)
 
         algo_scrollbar = tk.Scrollbar(
             algo_area,
             orient="vertical",
-            command=self.algo_canvas.yview
+            command=self.algo_canvas.yview,
+            bg=self.COLORS["panel"],
+            troughcolor=self.COLORS["panel_2"],
+            activebackground=self.COLORS["accent"],
+            relief="flat",
         )
         algo_scrollbar.pack(side="right", fill="y")
-
         self.algo_canvas.configure(yscrollcommand=algo_scrollbar.set)
 
-        self.algo_container = tk.Frame(self.algo_canvas, bg="white")
+        self.algo_container = tk.Frame(self.algo_canvas, bg=self.COLORS["panel"])
         self.algo_canvas_window = self.algo_canvas.create_window(
-            (0, 0),
-            window=self.algo_container,
-            anchor="nw"
+            (0, 0), window=self.algo_container, anchor="nw"
         )
 
         self.algo_container.bind(
             "<Configure>",
-            lambda e: self.algo_canvas.configure(
-                scrollregion=self.algo_canvas.bbox("all")
-            )
+            lambda e: self.algo_canvas.configure(scrollregion=self.algo_canvas.bbox("all")),
         )
-
         self.algo_canvas.bind(
             "<Configure>",
-            lambda e: self.algo_canvas.itemconfigure(
-                self.algo_canvas_window,
-                width=e.width
-            )
+            lambda e: self.algo_canvas.itemconfigure(self.algo_canvas_window, width=e.width),
         )
-
         self.algo_canvas.bind(
             "<Enter>",
-            lambda e: self.root.bind_all("<MouseWheel>", self.scroll_algorithm_mouse)
+            lambda e: self.root.bind_all("<MouseWheel>", self.scroll_algorithm_mouse),
         )
-        self.algo_canvas.bind(
-            "<Leave>",
-            lambda e: self.root.unbind_all("<MouseWheel>")
-        )
+        self.algo_canvas.bind("<Leave>", lambda e: self.root.unbind_all("<MouseWheel>"))
 
         for name in ALGORITHMS:
-            tk.Radiobutton(
+            rb = tk.Radiobutton(
                 self.algo_container,
                 text=name,
                 value=name,
                 variable=self.selected_algorithm,
-                font=("Arial", 14, "bold"),
-                bg="white",
-                activebackground="white",
-                selectcolor="#e8f0fe",
+                font=("Segoe UI", 11, "bold"),
+                bg=self.COLORS["card"],
+                fg=self.COLORS["text"],
+                activebackground=self.COLORS["accent_2"],
+                activeforeground="white",
+                selectcolor=self.COLORS["accent_2"],
                 indicatoron=False,
-                width=12,
-                pady=7
-            ).pack(fill="x", padx=8, pady=5)
+                bd=0,
+                relief="flat",
+                cursor="hand2",
+                anchor="w",
+                padx=14,
+                pady=9,
+            )
+            rb.pack(fill="x", padx=6, pady=4)
 
-        buttons = tk.Frame(control, bg="white")
-        buttons.pack(fill="x", padx=20, pady=(8, 0))
+        buttons = tk.Frame(control, bg=self.COLORS["panel"])
+        buttons.pack(fill="x", padx=22, pady=(8, 0))
 
-        tk.Button(
-            buttons,
-            text="Solve",
-            font=("Arial", 15, "bold"),
-            width=12,
-            bg="#2f80ed",
-            fg="white",
-            activebackground="#1c6dd0",
-            activeforeground="white",
-            relief="flat",
-            command=self.solve
-        ).pack(pady=(0, 8), ipady=6)
+        self.make_button(buttons, "Solve", self.solve, self.COLORS["accent_2"]).pack(fill="x", pady=(0, 8), ipady=8)
+        self.make_button(buttons, "New Puzzle", self.new_puzzle, self.COLORS["card"]).pack(fill="x", pady=6, ipady=7)
+        self.make_button(buttons, "Pause", self.pause_animation, self.COLORS["warning"]).pack(fill="x", pady=6, ipady=7)
+        self.make_button(buttons, "Resume", self.resume_animation, self.COLORS["success"]).pack(fill="x", pady=6, ipady=7)
 
-        tk.Button(
-            buttons,
-            text="New Puzzle",
-            font=("Arial", 13, "bold"),
-            width=12,
-            bg="#e9eef5",
-            fg="#222",
-            activebackground="#dce3ec",
-            relief="flat",
-            command=self.new_puzzle
-        ).pack(pady=6, ipady=5)
+        status = tk.Frame(control, bg=self.COLORS["panel_2"], highlightthickness=1, highlightbackground=self.COLORS["border"])
+        status.pack(side="bottom", fill="x", padx=22, pady=(10, 22))
 
-        tk.Button(
-            buttons,
-            text="Pause",
-            font=("Arial", 13, "bold"),
-            width=12,
-            bg="#f4b400",
-            fg="white",
-            relief="flat",
-            command=self.pause_animation
-        ).pack(pady=6, ipady=5)
-
-        tk.Button(
-            buttons,
-            text="Resume",
-            font=("Arial", 13, "bold"),
-            width=12,
-            bg="#34a853",
-            fg="white",
-            relief="flat",
-            command=self.resume_animation
-        ).pack(pady=6, ipady=5)
+        self.status_badge = tk.Label(
+            status,
+            text="READY",
+            font=("Segoe UI", 10, "bold"),
+            bg=self.COLORS["accent"],
+            fg="#082f49",
+            padx=10,
+            pady=3,
+        )
+        self.status_badge.pack(anchor="w", padx=12, pady=(12, 6))
 
         self.info_label = tk.Label(
-            control,
+            status,
             text="Steps: 0\nNodes: 0",
-            font=("Arial", 13),
-            bg="white",
-            justify="left"
+            font=("Consolas", 13, "bold"),
+            bg=self.COLORS["panel_2"],
+            fg=self.COLORS["text"],
+            justify="left",
         )
-        self.info_label.pack(side="bottom", pady=(8, 18))
+        self.info_label.pack(anchor="w", padx=12, pady=(0, 12))
+
+    def make_button(self, parent, text, command, color):
+        return tk.Button(
+            parent,
+            text=text,
+            font=("Segoe UI", 12, "bold"),
+            bg=color,
+            fg="white",
+            activebackground=self.COLORS["accent"],
+            activeforeground="#020617",
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+            command=command,
+        )
 
     def states_panel(self, parent):
         states = self.panel(parent)
-        states.pack(side="left", fill="both", expand=True)
+        states.grid(row=0, column=2, sticky="ns", padx=(10, 22), pady=18)
+        states.config(width=520, height=784)
+        states.grid_propagate(False)
+        states.grid_columnconfigure(0, weight=1)
+        states.grid_rowconfigure(1, weight=1)
 
-        self.title(states, "States").pack(pady=(18, 8))
+        header = tk.Frame(states, bg=self.COLORS["panel"])
+        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 10))
+        self.title(header, "States", 23).pack(side="left")
+        self.path_label = tk.Label(
+            header,
+            text="No path yet",
+            font=("Segoe UI", 11, "bold"),
+            bg=self.COLORS["panel"],
+            fg=self.COLORS["muted"],
+        )
+        self.path_label.pack(side="right")
 
-        canvas_area = tk.Frame(states, bg="white")
-        canvas_area.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+        canvas_area = tk.Frame(states, bg=self.COLORS["panel_2"], highlightthickness=1, highlightbackground=self.COLORS["border"])
+        canvas_area.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        canvas_area.grid_columnconfigure(0, weight=1)
+        canvas_area.grid_rowconfigure(0, weight=1)
 
         self.canvas = tk.Canvas(
             canvas_area,
-            width=300,
-            height=520,
-            bg="white",
-            highlightthickness=0
+            bg=self.COLORS["panel_2"],
+            highlightthickness=0,
         )
-        self.canvas.pack(side="left", fill="both", expand=True)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
 
         scrollbar = tk.Scrollbar(
             canvas_area,
             orient="vertical",
-            command=self.canvas.yview
+            command=self.canvas.yview,
+            bg=self.COLORS["panel"],
+            troughcolor=self.COLORS["panel_2"],
+            activebackground=self.COLORS["accent"],
+            relief="flat",
         )
-        scrollbar.pack(side="right", fill="y")
-
+        scrollbar.grid(row=0, column=1, sticky="ns")
         self.canvas.configure(yscrollcommand=scrollbar.set)
 
-        self.states_container = tk.Frame(self.canvas, bg="white")
-        self.canvas_window = self.canvas.create_window(
-            (150, 0),
-            window=self.states_container,
-            anchor="n"
-        )
+        self.states_container = tk.Frame(self.canvas, bg=self.COLORS["panel_2"])
+        self.states_container.grid_columnconfigure(0, weight=1)
+        self.states_container.grid_columnconfigure(1, weight=1)
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.states_container, anchor="nw")
 
         self.states_container.bind(
             "<Configure>",
-            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        )
-
-        self.canvas.bind(
-            "<Enter>",
-            lambda e: self.root.bind_all("<MouseWheel>", self.scroll_mouse)
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")),
         )
         self.canvas.bind(
-            "<Leave>",
-            lambda e: self.root.unbind_all("<MouseWheel>")
+            "<Configure>",
+            lambda e: self.canvas.itemconfigure(self.canvas_window, width=e.width),
         )
+        self.canvas.bind("<Enter>", lambda e: self.root.bind_all("<MouseWheel>", self.scroll_mouse))
+        self.canvas.bind("<Leave>", lambda e: self.root.unbind_all("<MouseWheel>"))
 
-    def title(self, parent, text):
-        return tk.Label(
-            parent,
-            text=text,
-            font=("Arial", 20, "bold"),
-            bg="white",
-            fg="#111"
-        )
-
-    # Table(Grid)
+    # ---------- Grid ----------
     def create_grid(self, parent, big=False):
         cells = []
-
-        font_size = 22 if big else 16
-        width = 4 if big else 4
-        height = 2 if big else 2
-        border = 3 if big else 2
+        # Big grid is compact enough to keep Start/Goal visible.
+        # Small grid is enlarged for easier reading inside State cards.
+        font_size = 22 if big else 17
+        width = 3 if big else 3
+        height = 1 if big else 1
+        pad = 3 if big else 2
 
         for i in range(9):
             cell = tk.Label(
                 parent,
                 width=width,
                 height=height,
-                font=("Arial", font_size, "bold"),
-                bg="#f8fafc",
-                fg="#111",
-                bd=border,
-                relief="solid"
+                font=("Segoe UI", font_size, "bold"),
+                bg=self.COLORS["cell"],
+                fg=self.COLORS["text"],
+                bd=0,
+                highlightthickness=1,
+                highlightbackground=self.COLORS["border"],
+                highlightcolor=self.COLORS["accent"],
             )
-
-            cell.grid(row=i // 3, column=i % 3)
+            cell.grid(row=i // 3, column=i % 3, padx=pad, pady=pad)
             cells.append(cell)
 
         return cells
 
     def draw_grid(self, cells, state):
         for cell, value in zip(cells, state):
-            cell.config(text=" " if value == 0 else str(value))
+            if value == 0:
+                cell.config(text="", bg=self.COLORS["cell_empty"], fg=self.COLORS["muted"])
+            else:
+                cell.config(text=str(value), bg=self.COLORS["cell"], fg=self.COLORS["text"])
 
     def draw_main_grids(self):
         self.draw_grid(self.start_cells, self.start)
         self.draw_grid(self.goal_cells, self.goal)
 
     def draw_state_card(self, state):
-        frame = tk.Frame(self.states_container, bg="white")
-        frame.pack(pady=8)
+        # Show states in 2 columns to reduce wasted space and make each state larger.
+        idx = self.current_index
+        row = idx // 2
+        col = idx % 2
 
-        cells = self.create_grid(frame, big=False)
+        card = tk.Frame(
+            self.states_container,
+            bg=self.COLORS["card"],
+            highlightthickness=1,
+            highlightbackground=self.COLORS["border"],
+        )
+        card.grid(row=row, column=col, padx=10, pady=10, sticky="n")
+
+        label = tk.Label(
+            card,
+            text=f"State {idx + 1}",
+            font=("Segoe UI", 10, "bold"),
+            bg=self.COLORS["card"],
+            fg=self.COLORS["accent"],
+        )
+        label.pack(anchor="w", padx=10, pady=(8, 4))
+
+        grid_frame = tk.Frame(card, bg=self.COLORS["card"])
+        grid_frame.pack(padx=10, pady=(0, 10))
+        cells = self.create_grid(grid_frame, big=False)
         self.draw_grid(cells, state)
 
-    # Actions
+    # ---------- Actions ----------
     def clear_states(self):
-
         self.paused = False
 
         if self.animation_job:
@@ -872,54 +1090,50 @@ class PuzzleApp:
             widget.destroy()
 
         self.canvas.yview_moveto(0)
+        self.current_index = 0
+        self.path_label.config(text="No path yet")
+        self.status_badge.config(text="READY", bg=self.COLORS["accent"], fg="#082f49")
 
     def solve(self):
-
         self.clear_states()
 
         algo_name = self.selected_algorithm.get()
         search = ALGORITHMS[algo_name]
+        self.status_badge.config(text="RUNNING", bg=self.COLORS["warning"], fg="#111827")
+        self.root.update_idletasks()
 
         result, nodes = search(self.start, self.goal)
 
         if result is None:
-            self.info_label.config(
-                text=f"Steps: Not found\nNodes: {nodes}"
-            )
-
+            self.info_label.config(text=f"Steps: Not found\nNodes: {nodes}")
+            self.path_label.config(text=f"{algo_name}: not found")
+            self.status_badge.config(text="FAILED", bg=self.COLORS["danger"], fg="white")
             return
 
         self.current_path = result
         self.current_index = 0
         self.paused = False
 
-        self.info_label.config(
-            text=f"Steps: {len(result) - 1}\nNodes: {nodes}"
-        )
+        self.info_label.config(text=f"Steps: {len(result) - 1}\nNodes: {nodes}")
+        self.path_label.config(text=f"{algo_name} • {len(result) - 1} steps")
+        self.status_badge.config(text="SHOWING", bg=self.COLORS["success"], fg="#052e16")
 
         self.show_states()
 
     def show_states(self):
-
         if self.paused:
             return
 
         if self.current_index >= len(self.current_path):
+            self.status_badge.config(text="DONE", bg=self.COLORS["accent"], fg="#082f49")
             return
 
-        self.draw_state_card(
-            self.current_path[self.current_index]
-        )
-
+        self.draw_state_card(self.current_path[self.current_index])
         self.canvas.update_idletasks()
         self.canvas.yview_moveto(1.0)
 
         self.current_index += 1
-
-        self.animation_job = self.root.after(
-            250,
-            self.show_states
-        )
+        self.animation_job = self.root.after(220, self.show_states)
 
     def new_puzzle(self):
         self.clear_states()
@@ -928,32 +1142,27 @@ class PuzzleApp:
         self.info_label.config(text="Steps: 0\nNodes: 0")
 
     def scroll_algorithm_mouse(self, event):
-        self.algo_canvas.yview_scroll(
-            int(-1 * (event.delta / 120)),
-            "units"
-        )
+        self.algo_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def scroll_mouse(self, event):
-        self.canvas.yview_scroll(
-            int(-1 * (event.delta / 120)),
-            "units"
-        )
+        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def pause_animation(self):
-
         self.paused = True
+        self.status_badge.config(text="PAUSED", bg=self.COLORS["warning"], fg="#111827")
 
         if self.animation_job:
             self.root.after_cancel(self.animation_job)
             self.animation_job = None
 
     def resume_animation(self):
-
         if not self.paused:
             return
 
         self.paused = False
+        self.status_badge.config(text="SHOWING", bg=self.COLORS["success"], fg="#052e16")
         self.show_states()
+
 
 if __name__ == "__main__":
     root = tk.Tk()
