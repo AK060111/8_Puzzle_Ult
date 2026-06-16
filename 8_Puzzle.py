@@ -709,6 +709,133 @@ def simulated_annealing(start, goal, t0=100.0, t_min=0.001, alpha=0.97, max_step
 
     return None, expanded
 
+def and_or_graph_search(start, goal, max_depth=35):
+    start = tuple(start)
+    goal = tuple(goal)
+    expanded = 0
+
+    def or_search(state, path, depth):
+        nonlocal expanded
+        expanded += 1
+
+        if state == goal:
+            return [state]
+
+        if state in path or depth >= max_depth:
+            return None
+
+        for neighbor in get_neighbors(state):
+            plan = and_search([neighbor], path + [state], depth + 1)
+            if plan is not None:
+                return [state] + plan
+
+        return None
+
+    def and_search(states, path, depth):
+        full_plan = []
+
+        for s in states:
+            plan = or_search(s, path, depth)
+            if plan is None:
+                return None
+
+            if not full_plan:
+                full_plan = plan
+            else:
+                full_plan += plan[1:]
+
+        return full_plan
+
+    result = or_search(start, [], 0)
+
+    if result is None:
+        return None, expanded
+
+    return [list(state) for state in result], expanded
+
+
+def backtracking_search(start, goal, max_depth=50):
+    start = tuple(start)
+    goal = tuple(goal)
+    expanded = 0
+
+    def backtrack(state, path, depth):
+        nonlocal expanded
+        expanded += 1
+
+        if state == goal:
+            return path + [state]
+
+        if depth >= max_depth:
+            return None
+
+        for neighbor in get_neighbors(state):
+            if neighbor not in path:
+                result = backtrack(neighbor, path + [state], depth + 1)
+
+                if result is not None:
+                    return result
+
+        return None
+
+    result = backtrack(start, [], 0)
+
+    if result is None:
+        return None, expanded
+
+    return [list(state) for state in result], expanded
+
+
+def forward_checking_search(start, goal, max_depth=50):
+    start = tuple(start)
+    goal = tuple(goal)
+    expanded = 0
+
+    def forward_check(state, path):
+        neighbors = list(get_neighbors(state))
+
+        valid_neighbors = []
+        for neighbor in neighbors:
+            if neighbor not in path:
+                valid_neighbors.append(neighbor)
+
+        return valid_neighbors
+
+    def backtrack_fc(state, path, depth):
+        nonlocal expanded
+        expanded += 1
+
+        if state == goal:
+            return path + [state]
+
+        if depth >= max_depth:
+            return None
+
+        candidates = forward_check(state, path)
+
+        # Uu tien trang thai co heuristic tot hon
+        candidates.sort(key=lambda s: misplaced_tiles(s, goal))
+
+        for neighbor in candidates:
+            future_candidates = forward_check(neighbor, path + [state])
+
+            # Forward Checking: neu chua toi goal ma khong con nuoc di thi loai som
+            if neighbor != goal and not future_candidates:
+                continue
+
+            result = backtrack_fc(neighbor, path + [state], depth + 1)
+
+            if result is not None:
+                return result
+
+        return None
+
+    result = backtrack_fc(start, [], 0)
+
+    if result is None:
+        return None, expanded
+
+    return [list(state) for state in result], expanded
 
 ALGORITHMS = {
     "BFS": bfs,
@@ -727,6 +854,9 @@ ALGORITHMS = {
     "Blind Start": blind_start_search,
     "Blind Goal": blind_goal_search,
     "Blind Start+Goal": bidirectional_bfs,
+    "AND-OR": and_or_graph_search,
+    "Backtracking": backtracking_search,
+    "Forward Checking": forward_checking_search,
 }
 
 # GUI
