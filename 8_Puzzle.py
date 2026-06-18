@@ -859,13 +859,481 @@ ALGORITHMS = {
     "Forward Checking": forward_checking_search,
 }
 
+# CSP Map Coloring
+# Random map: 5 vung, 3 mau
+CSP_COLORS = ["Red", "Green", "Blue"]
+CSP_COLOR_HEX = {
+    "Red": "#ef4444",
+    "Green": "#22c55e",
+    "Blue": "#3b82f6",
+}
+
+
+def build_csp_neighbors(variables, edges):
+    neighbors = {v: [] for v in variables}
+
+    for x, y in edges:
+        neighbors[x].append(y)
+        neighbors[y].append(x)
+
+    return neighbors
+
+
+def generate_random_csp_map():
+    """
+    Dieu kien random:
+    - Luon co 5 vung: A, B, C, D, E
+    - Luon co 3 mau: Red, Green, Blue
+    - Graph luon lien thong
+    - So canh random tu 5 den 7
+    - Dam bao co nghiem voi 3 mau
+    """
+    variables = ["A", "B", "C", "D", "E"]
+    max_try = 200
+
+    for _ in range(max_try):
+        edges = set()
+
+        # Tao cay lien thong truoc
+        for i in range(1, len(variables)):
+            a = variables[i]
+            b = random.choice(variables[:i])
+            edges.add(tuple(sorted((a, b))))
+
+        # Them canh random de map khac nhau moi lan
+        all_possible = []
+        for i in range(len(variables)):
+            for j in range(i + 1, len(variables)):
+                edge = tuple(sorted((variables[i], variables[j])))
+                if edge not in edges:
+                    all_possible.append(edge)
+
+        random.shuffle(all_possible)
+        target_edges = random.randint(5, 7)
+
+        while len(edges) < target_edges and all_possible:
+            edges.add(all_possible.pop())
+
+        edges = sorted(list(edges))
+        assignment, steps = csp_backtracking_alg(variables, CSP_COLORS, edges)
+
+        # Chi nhan map co nghiem
+        if len(assignment) == len(variables):
+            return variables, CSP_COLORS[:], edges
+
+    # Fallback neu random xui
+    return variables, CSP_COLORS[:], [
+        ("A", "B"), ("A", "C"), ("B", "C"),
+        ("B", "D"), ("C", "E"), ("D", "E")
+    ]
+
+
+def csp_is_valid_alg(var, color, assignment, neighbors):
+    for neighbor in neighbors[var]:
+        if assignment.get(neighbor) == color:
+            return False
+    return True
+
+
+def csp_conflicts_alg(var, color, assignment, neighbors):
+    count = 0
+
+    for neighbor in neighbors[var]:
+        if assignment.get(neighbor) == color:
+            count += 1
+
+    return count
+
+
+def csp_backtracking_alg(variables, colors, edges):
+    neighbors = build_csp_neighbors(variables, edges)
+    assignment = {}
+    steps = []
+    expanded = 0
+
+    def backtrack(index):
+        nonlocal expanded
+        expanded += 1
+
+        if index == len(variables):
+            steps.append("DONE: " + str(assignment))
+            return True
+
+        var = variables[index]
+
+        for color in colors:
+            steps.append(f"Try {var} = {color}")
+
+            if csp_is_valid_alg(var, color, assignment, neighbors):
+                assignment[var] = color
+                steps.append(f"Assign {var} = {color}")
+
+                if backtrack(index + 1):
+                    return True
+
+                steps.append(f"Backtrack {var}")
+                del assignment[var]
+            else:
+                steps.append(f"Reject {var} = {color}")
+
+        return False
+
+    backtrack(0)
+    steps.insert(0, f"Expanded nodes: {expanded}")
+    return assignment, steps
+
+
+def csp_forward_checking_alg(variables, colors, edges):
+    neighbors = build_csp_neighbors(variables, edges)
+    domains = {v: colors[:] for v in variables}
+    assignment = {}
+    steps = []
+    expanded = 0
+
+    def backtrack(index, domains):
+        nonlocal expanded
+        expanded += 1
+
+        if index == len(variables):
+            steps.append("DONE: " + str(assignment))
+            return True
+
+        var = variables[index]
+
+        for color in domains[var]:
+            steps.append(f"Try {var} = {color}")
+
+            if not csp_is_valid_alg(var, color, assignment, neighbors):
+                steps.append(f"Reject {var} = {color}")
+                continue
+
+            assignment[var] = color
+            new_domains = {v: domains[v][:] for v in domains}
+            ok = True
+
+            for neighbor in neighbors[var]:
+                if neighbor not in assignment and color in new_domains[neighbor]:
+                    new_domains[neighbor].remove(color)
+                    steps.append(f"Remove {color} from Domain({neighbor})")
+
+                    if not new_domains[neighbor]:
+                        steps.append(f"Fail: Domain({neighbor}) empty")
+                        ok = False
+                        break
+
+            if ok and backtrack(index + 1, new_domains):
+                return True
+
+            steps.append(f"Backtrack {var}")
+            del assignment[var]
+
+        return False
+
+    backtrack(0, domains)
+    steps.insert(0, f"Expanded nodes: {expanded}")
+    return assignment, steps
+
+
+def csp_ac3_alg(variables, colors, edges):
+    neighbors = build_csp_neighbors(variables, edges)
+    domains = {v: colors[:] for v in variables}
+
+    # Gan ngau nhien 1 vung truoc de AC-3 co tac dung ro hon
+    fixed_var = random.choice(variables)
+    fixed_color = random.choice(colors)
+    domains[fixed_var] = [fixed_color]
+
+    queue = deque(edges + [(y, x) for x, y in edges])
+    steps = [f"Initial: {fixed_var} = {fixed_color}"]
+
+    def revise(xi, xj):
+        revised = False
+
+        for x in domains[xi][:]:
+            # Constraint: xi != xj
+            if not any(x != y for y in domains[xj]):
+                domains[xi].remove(x)
+                steps.append(f"Remove {x} from Domain({xi}) because of {xj}")
+                revised = True
+
+        return revised
+
+    while queue:
+        xi, xj = queue.popleft()
+        steps.append(f"Check arc ({xi}, {xj})")
+
+        if revise(xi, xj):
+            if not domains[xi]:
+                steps.append(f"Fail: Domain({xi}) empty")
+                return {}, steps, domains
+
+            for xk in neighbors[xi]:
+                if xk != xj:
+                    queue.append((xk, xi))
+
+    assignment = {}
+
+    for var in variables:
+        if len(domains[var]) == 1:
+            assignment[var] = domains[var][0]
+
+    steps.append("Domains after AC-3: " + str(domains))
+    return assignment, steps, domains
+
+
+def csp_min_conflicts_alg(variables, colors, edges, max_steps=100):
+    neighbors = build_csp_neighbors(variables, edges)
+    assignment = {v: random.choice(colors) for v in variables}
+    steps = ["Initial: " + str(assignment)]
+
+    def conflicted_vars():
+        result = []
+
+        for var in variables:
+            if csp_conflicts_alg(var, assignment[var], assignment, neighbors) > 0:
+                result.append(var)
+
+        return result
+
+    for step in range(max_steps):
+        conflict_vars = conflicted_vars()
+
+        if not conflict_vars:
+            steps.append("DONE: " + str(assignment))
+            return assignment, steps
+
+        var = random.choice(conflict_vars)
+
+        best_color = min(
+            colors,
+            key=lambda color: csp_conflicts_alg(var, color, assignment, neighbors)
+        )
+
+        assignment[var] = best_color
+        steps.append(f"Step {step + 1}: set {var} = {best_color}")
+
+    steps.append("Stopped: max steps reached")
+    return assignment, steps
+
+
+class CSPDemoWindow:
+    def __init__(self, root, colors):
+        self.root = tk.Toplevel(root)
+        self.root.title("CSP Map Coloring - Random 5 Regions")
+        self.root.geometry("820x600")
+        self.root.resizable(False, False)
+        self.COLORS = colors
+
+        self.variables = []
+        self.colors = CSP_COLORS[:]
+        self.edges = []
+        self.assignment = {}
+
+        self.node_pos = {
+            "A": (250, 80),
+            "B": (110, 230),
+            "C": (390, 230),
+            "D": (170, 410),
+            "E": (330, 410),
+        }
+
+        self.setup_ui()
+        self.generate_map()
+
+    def setup_ui(self):
+        self.root.configure(bg=self.COLORS["bg"])
+
+        left = tk.Frame(self.root, bg=self.COLORS["panel"], width=540, height=575)
+        left.pack(side="left", fill="both", padx=12, pady=12)
+        left.pack_propagate(False)
+
+        right = tk.Frame(self.root, bg=self.COLORS["panel"], width=250, height=575)
+        right.pack(side="right", fill="both", padx=(0, 12), pady=12)
+        right.pack_propagate(False)
+
+        title = tk.Label(
+            left,
+            text="CSP Random Map Coloring",
+            font=("Segoe UI", 18, "bold"),
+            bg=self.COLORS["panel"],
+            fg=self.COLORS["text"],
+        )
+        title.pack(anchor="w", padx=16, pady=(14, 2))
+
+        note = tk.Label(
+            left,
+            text="5 regions • 3 colors • connected random graph",
+            font=("Segoe UI", 10),
+            bg=self.COLORS["panel"],
+            fg=self.COLORS["muted"],
+        )
+        note.pack(anchor="w", padx=16, pady=(0, 8))
+
+        self.canvas = tk.Canvas(
+            left,
+            width=500,
+            height=460,
+            bg=self.COLORS["panel_2"],
+            highlightthickness=1,
+            highlightbackground=self.COLORS["border"],
+        )
+        self.canvas.pack(padx=16, pady=(0, 16))
+
+        button_frame = tk.Frame(right, bg=self.COLORS["panel"])
+        button_frame.pack(fill="x", padx=14, pady=(16, 10))
+
+        self.make_button(button_frame, "Generate Map", self.generate_map).pack(fill="x", pady=(0, 12), ipady=7)
+        self.make_button(button_frame, "Backtracking", self.run_backtracking).pack(fill="x", pady=5, ipady=6)
+        self.make_button(button_frame, "Forward Checking", self.run_forward_checking).pack(fill="x", pady=5, ipady=6)
+        self.make_button(button_frame, "AC-3", self.run_ac3).pack(fill="x", pady=5, ipady=6)
+        self.make_button(button_frame, "Min-Conflict", self.run_min_conflicts).pack(fill="x", pady=5, ipady=6)
+        self.make_button(button_frame, "Reset Color", self.reset).pack(fill="x", pady=(14, 5), ipady=6)
+
+        self.output = tk.Text(
+            right,
+            height=20,
+            bg=self.COLORS["panel_2"],
+            fg=self.COLORS["text"],
+            insertbackground=self.COLORS["text"],
+            font=("Consolas", 10),
+            relief="flat",
+            wrap="word",
+        )
+        self.output.pack(fill="both", expand=True, padx=14, pady=(6, 14))
+
+    def make_button(self, parent, text, command):
+        return tk.Button(
+            parent,
+            text=text,
+            font=("Segoe UI", 10, "bold"),
+            bg=self.COLORS["card"],
+            fg="white",
+            activebackground=self.COLORS["accent"],
+            activeforeground="#020617",
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+            command=command,
+        )
+
+    def color_to_hex(self, color):
+        if color in CSP_COLOR_HEX:
+            return CSP_COLOR_HEX[color]
+
+        return self.COLORS["cell"]
+
+    def draw_graph(self):
+        self.canvas.delete("all")
+
+        # Ve canh
+        for x, y in self.edges:
+            x1, y1 = self.node_pos[x]
+            x2, y2 = self.node_pos[y]
+            self.canvas.create_line(x1, y1, x2, y2, fill=self.COLORS["border"], width=4)
+
+        # Ve node
+        for node in self.variables:
+            x, y = self.node_pos[node]
+            fill = self.color_to_hex(self.assignment.get(node))
+            self.canvas.create_oval(
+                x - 36, y - 36,
+                x + 36, y + 36,
+                fill=fill,
+                outline=self.COLORS["accent"],
+                width=2,
+            )
+            self.canvas.create_text(
+                x,
+                y,
+                text=node,
+                fill="white",
+                font=("Segoe UI", 18, "bold"),
+            )
+
+        edge_text = ", ".join([f"{a}-{b}" for a, b in self.edges])
+        self.canvas.create_text(
+            250,
+            25,
+            text=f"Edges: {edge_text}",
+            fill=self.COLORS["muted"],
+            font=("Segoe UI", 9),
+        )
+
+    def generate_map(self):
+        self.variables, self.colors, self.edges = generate_random_csp_map()
+        self.assignment = {}
+        self.draw_graph()
+
+        self.output.delete("1.0", "end")
+        self.output.insert("end", "Random Map Generated\n")
+        self.output.insert("end", "====================\n\n")
+        self.output.insert("end", "Condition:\n")
+        self.output.insert("end", "- 5 regions: A, B, C, D, E\n")
+        self.output.insert("end", "- 3 colors: Red, Green, Blue\n")
+        self.output.insert("end", "- Connected graph\n")
+        self.output.insert("end", "- Random 5 to 7 edges\n")
+        self.output.insert("end", "- Solvable with 3 colors\n\n")
+        self.output.insert("end", "Edges:\n")
+        for a, b in self.edges:
+            self.output.insert("end", f"{a} - {b}\n")
+
+    def show_steps(self, title, assignment, steps):
+        self.assignment = assignment.copy()
+        self.draw_graph()
+
+        self.output.delete("1.0", "end")
+        self.output.insert("end", title + "\n")
+        self.output.insert("end", "=" * len(title) + "\n\n")
+
+        for step in steps:
+            self.output.insert("end", step + "\n")
+
+        self.output.insert("end", "\nResult:\n")
+        for var in self.variables:
+            self.output.insert("end", f"{var} = {assignment.get(var, '?')}\n")
+
+    def run_backtracking(self):
+        assignment, steps = csp_backtracking_alg(self.variables, self.colors, self.edges)
+        self.show_steps("Backtracking", assignment, steps)
+
+    def run_forward_checking(self):
+        assignment, steps = csp_forward_checking_alg(self.variables, self.colors, self.edges)
+        self.show_steps("Forward Checking", assignment, steps)
+
+    def run_ac3(self):
+        assignment, steps, domains = csp_ac3_alg(self.variables, self.colors, self.edges)
+
+        self.assignment = assignment.copy()
+        self.draw_graph()
+
+        self.output.delete("1.0", "end")
+        self.output.insert("end", "AC-3\n")
+        self.output.insert("end", "====\n\n")
+
+        for step in steps:
+            self.output.insert("end", step + "\n")
+
+        self.output.insert("end", "\nDomains:\n")
+        for var in self.variables:
+            self.output.insert("end", f"Domain({var}) = {domains[var]}\n")
+
+    def run_min_conflicts(self):
+        assignment, steps = csp_min_conflicts_alg(self.variables, self.colors, self.edges)
+        self.show_steps("Min-Conflict", assignment, steps)
+
+    def reset(self):
+        self.assignment = {}
+        self.draw_graph()
+        self.output.delete("1.0", "end")
+        self.output.insert("end", "Color reset.\n")
+
 # GUI
 class PuzzleApp:
     def __init__(self, root):
         self.root = root
         self.root.title("8 Puzzle Search")
-        self.root.geometry("1260x820")
-        self.root.minsize(1260, 820)
+        self.root.geometry("1220x740")
+        self.root.minsize(1120, 700)
         self.root.resizable(False, False)
         self.root.configure(bg="#0f172a")
 
@@ -905,12 +1373,14 @@ class PuzzleApp:
     def setup_ui(self):
         self.root.grid_columnconfigure(0, weight=0)
         self.root.grid_columnconfigure(1, weight=0)
-        self.root.grid_columnconfigure(2, weight=0)
+        self.root.grid_columnconfigure(2, weight=1)
+        self.root.grid_columnconfigure(3, weight=0)
         self.root.grid_rowconfigure(0, weight=1)
 
         self.left_panel(self.root)
         self.control_panel(self.root)
         self.states_panel(self.root)
+        self.stats_panel(self.root)
 
     def panel(self, parent):
         return tk.Frame(
@@ -941,33 +1411,33 @@ class PuzzleApp:
 
     def left_panel(self, parent):
         left = self.panel(parent)
-        left.grid(row=0, column=0, sticky="ns", padx=(22, 10), pady=18)
-        left.config(width=350, height=784)
+        left.grid(row=0, column=0, sticky="ns", padx=(14, 8), pady=12)
+        left.config(width=285, height=716)
         left.grid_propagate(False)
 
         header = tk.Frame(left, bg=self.COLORS["panel"])
         header.pack(fill="x", padx=24, pady=(18, 6))
-        self.title(header, "8 Puzzle", 23).pack(anchor="w")
+        self.title(header, "8 Puzzle", 21).pack(anchor="w")
         self.subtitle(header, "Start and target configuration").pack(anchor="w", pady=(2, 0))
 
-        self.title(left, "Start", 17).pack(anchor="w", padx=24, pady=(12, 6))
+        self.title(left, "Start", 15).pack(anchor="w", padx=24, pady=(10, 6))
         start_frame = tk.Frame(left, bg=self.COLORS["panel"])
         start_frame.pack(padx=24, pady=(0, 8))
         self.start_cells = self.create_grid(start_frame, big=True)
 
-        self.title(left, "Goal", 17).pack(anchor="w", padx=24, pady=(14, 6))
+        self.title(left, "Goal", 15).pack(anchor="w", padx=24, pady=(10, 6))
         goal_frame = tk.Frame(left, bg=self.COLORS["panel"])
         goal_frame.pack(padx=24, pady=(0, 12))
         self.goal_cells = self.create_grid(goal_frame, big=True)
 
     def control_panel(self, parent):
         control = self.panel(parent)
-        control.grid(row=0, column=1, sticky="ns", padx=10, pady=18)
-        control.config(width=330, height=784)
+        control.grid(row=0, column=1, sticky="ns", padx=8, pady=12)
+        control.config(width=285, height=716)
         control.grid_propagate(False)
 
-        self.title(control, "Algorithm", 21).pack(anchor="w", padx=22, pady=(22, 2))
-        self.subtitle(control, "Choose search strategy").pack(anchor="w", padx=22, pady=(0, 14))
+        self.title(control, "Algorithm", 19).pack(anchor="w", padx=18, pady=(16, 2))
+        self.subtitle(control, "Choose search strategy").pack(anchor="w", padx=18, pady=(0, 10))
 
         algo_area = tk.Frame(control, bg=self.COLORS["panel"])
         algo_area.pack(fill="x", padx=16, pady=(0, 12))
@@ -975,7 +1445,7 @@ class PuzzleApp:
         self.algo_canvas = tk.Canvas(
             algo_area,
             width=220,
-            height=285,
+            height=315,
             bg=self.COLORS["panel"],
             highlightthickness=0,
         )
@@ -1018,7 +1488,7 @@ class PuzzleApp:
                 text=name,
                 value=name,
                 variable=self.selected_algorithm,
-                font=("Segoe UI", 11, "bold"),
+                font=("Segoe UI", 10, "bold"),
                 bg=self.COLORS["card"],
                 fg=self.COLORS["text"],
                 activebackground=self.COLORS["accent_2"],
@@ -1030,41 +1500,19 @@ class PuzzleApp:
                 cursor="hand2",
                 anchor="w",
                 padx=14,
-                pady=9,
+                pady=7,
             )
-            rb.pack(fill="x", padx=6, pady=4)
+            rb.pack(fill="x", padx=6, pady=3)
 
         buttons = tk.Frame(control, bg=self.COLORS["panel"])
-        buttons.pack(fill="x", padx=22, pady=(8, 0))
+        buttons.pack(fill="x", padx=18, pady=(6, 0))
 
-        self.make_button(buttons, "Solve", self.solve, self.COLORS["accent_2"]).pack(fill="x", pady=(0, 8), ipady=8)
-        self.make_button(buttons, "New Puzzle", self.new_puzzle, self.COLORS["card"]).pack(fill="x", pady=6, ipady=7)
-        self.make_button(buttons, "Pause", self.pause_animation, self.COLORS["warning"]).pack(fill="x", pady=6, ipady=7)
-        self.make_button(buttons, "Resume", self.resume_animation, self.COLORS["success"]).pack(fill="x", pady=6, ipady=7)
+        self.make_button(buttons, "Solve", self.solve, self.COLORS["accent_2"]).pack(fill="x", pady=(0, 6), ipady=6)
+        self.make_button(buttons, "New Puzzle", self.new_puzzle, self.COLORS["card"]).pack(fill="x", pady=4, ipady=5)
+        self.make_button(buttons, "CSP Coloring", self.open_csp_demo, self.COLORS["accent_2"]).pack(fill="x", pady=4, ipady=5)
+        self.make_button(buttons, "Pause", self.pause_animation, self.COLORS["warning"]).pack(fill="x", pady=4, ipady=5)
+        self.make_button(buttons, "Resume", self.resume_animation, self.COLORS["success"]).pack(fill="x", pady=4, ipady=5)
 
-        status = tk.Frame(control, bg=self.COLORS["panel_2"], highlightthickness=1, highlightbackground=self.COLORS["border"])
-        status.pack(side="bottom", fill="x", padx=22, pady=(10, 22))
-
-        self.status_badge = tk.Label(
-            status,
-            text="READY",
-            font=("Segoe UI", 10, "bold"),
-            bg=self.COLORS["accent"],
-            fg="#082f49",
-            padx=10,
-            pady=3,
-        )
-        self.status_badge.pack(anchor="w", padx=12, pady=(12, 6))
-
-        self.info_label = tk.Label(
-            status,
-            text="Steps: 0\nNodes: 0",
-            font=("Consolas", 13, "bold"),
-            bg=self.COLORS["panel_2"],
-            fg=self.COLORS["text"],
-            justify="left",
-        )
-        self.info_label.pack(anchor="w", padx=12, pady=(0, 12))
 
     def make_button(self, parent, text, command, color):
         return tk.Button(
@@ -1081,21 +1529,59 @@ class PuzzleApp:
             command=command,
         )
 
+    def stats_panel(self, parent):
+        stats = self.panel(parent)
+        stats.grid(row=0, column=3, sticky="ns", padx=(8, 14), pady=12)
+        stats.config(width=180, height=716)
+        stats.grid_propagate(False)
+
+        self.title(stats, "Status", 18).pack(anchor="w", padx=16, pady=(16, 4))
+        self.subtitle(stats, "Run information").pack(anchor="w", padx=16, pady=(0, 12))
+
+        box = tk.Frame(
+            stats,
+            bg=self.COLORS["panel_2"],
+            highlightthickness=1,
+            highlightbackground=self.COLORS["border"],
+        )
+        box.pack(fill="x", padx=14, pady=(0, 12))
+
+        self.status_badge = tk.Label(
+            box,
+            text="READY",
+            font=("Segoe UI", 10, "bold"),
+            bg=self.COLORS["accent"],
+            fg="#082f49",
+            padx=10,
+            pady=4,
+        )
+        self.status_badge.pack(anchor="w", padx=10, pady=(12, 8))
+
+        self.info_label = tk.Label(
+            box,
+            text="Steps: 0\nNodes: 0",
+            font=("Consolas", 12, "bold"),
+            bg=self.COLORS["panel_2"],
+            fg=self.COLORS["text"],
+            justify="left",
+        )
+        self.info_label.pack(anchor="w", padx=10, pady=(0, 12))
+
     def states_panel(self, parent):
         states = self.panel(parent)
-        states.grid(row=0, column=2, sticky="ns", padx=(10, 22), pady=18)
-        states.config(width=520, height=784)
+        states.grid(row=0, column=2, sticky="nsew", padx=8, pady=12)
+        states.config(width=470, height=716)
         states.grid_propagate(False)
         states.grid_columnconfigure(0, weight=1)
         states.grid_rowconfigure(1, weight=1)
 
         header = tk.Frame(states, bg=self.COLORS["panel"])
         header.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 10))
-        self.title(header, "States", 23).pack(side="left")
+        self.title(header, "States", 21).pack(side="left")
         self.path_label = tk.Label(
             header,
             text="No path yet",
-            font=("Segoe UI", 11, "bold"),
+            font=("Segoe UI", 10, "bold"),
             bg=self.COLORS["panel"],
             fg=self.COLORS["muted"],
         )
@@ -1146,10 +1632,10 @@ class PuzzleApp:
         cells = []
         # Big grid is compact enough to keep Start/Goal visible.
         # Small grid is enlarged for easier reading inside State cards.
-        font_size = 22 if big else 17
+        font_size = 20 if big else 15
         width = 3 if big else 3
         height = 1 if big else 1
-        pad = 3 if big else 2
+        pad = 2 if big else 2
 
         for i in range(9):
             cell = tk.Label(
@@ -1192,12 +1678,12 @@ class PuzzleApp:
             highlightthickness=1,
             highlightbackground=self.COLORS["border"],
         )
-        card.grid(row=row, column=col, padx=10, pady=10, sticky="n")
+        card.grid(row=row, column=col, padx=7, pady=7, sticky="n")
 
         label = tk.Label(
             card,
             text=f"State {idx + 1}",
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 9, "bold"),
             bg=self.COLORS["card"],
             fg=self.COLORS["accent"],
         )
@@ -1270,6 +1756,9 @@ class PuzzleApp:
         self.start, self.goal = generate_puzzle()
         self.draw_main_grids()
         self.info_label.config(text="Steps: 0\nNodes: 0")
+
+    def open_csp_demo(self):
+        CSPDemoWindow(self.root, self.COLORS)
 
     def scroll_algorithm_mouse(self, event):
         self.algo_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
